@@ -1,323 +1,117 @@
-<h3>sqlrun</h3>
 
-sqlrun.pl is a Perl script and related modules that can be used to run multiple SQL statements from a number of sessions.
+# Sequences, Timestamps and RAC
 
-<pre>
+Testing how to guarantee that when generating an ID from a sequence, along with a timestamp on RAC, the timestamp for any ID will always be greater than any previous timestamp.
 
-              --db  which database to connect to
-        --username  account to connect to
-        --password  obvious. 
-                    user will be prompted for password if not on the command line
+There are several things that could cause race conditions that prevent this from working
 
-    --max-sessions  number of sessions to use
- 
-       --exe-delay  seconds to delay between sql executions defaults to 0.1 seconds
+- Oracle internal code path
+- multiple CPUs
+- CPU - out of order execution
 
-   --connect-delay  seconds to delay be between connections
-                    valid only for '--session-mode trickle'
+# Serialization with DBMS_LOCK
 
-    --connect-mode  [ trickle | flood | tsunami ] - default is flood
-                    trickle: gradually add sessions up to max-sessions
-                    flood: startup sessions as quickly as possible
-                    tsunami: wait until all sessions are connected before they are allowed to work
+Some form of serialization is needed to guarantee the timestamps will always ascend.
 
-        --exe-mode  [ sequential | semi-random | truly-random ] - default is sequential
-                    sequential: each session iterates through the SQL statements serially
-                    semi-random: a value assigned in the sqlfile determines how frequently each SQL is executed
-                    truly-random: SQL selected randomly by each session
+This can be made to work with DBMS_LOCK, but it is somewhat expensive.
 
-          --sqldir  location of SQL script files and bind variable files. default is ./SQL
+## Without Serialization
 
-         --sqlfile  this refers to the file that names the SQL script files to use 
-                    the names of the bind variable files will be defined here as well
-						  default is ./sqlfile.conf
+```bash
+$  ./sqlrun.sh
 
-         -parmfile  file containing session parameters to set
-                    see example parameters.conf
+SEQUENCE_NAME   CACHE_SIZE ORDERED LAST_NUMBER
+--------------- ---------- ------- -----------
+SEQ_CACHE_TEST        1000 Y             44001
+Connection Test - JKSTILL - 71
 
-         --runtime  how long (in seconds) the jobs should run
-                    the timer starts when the first session starts
+Sequences per second: 648
 
- --bind-array-size  defines how many records from the bind array file are to be used per SQL execution
-                    default is 1
-                    Note: not yet implemented
+```
 
---cache-array-size  defines the size of array to use to retreive data - similar to 'set array' in sqlplus 
-                    default is 100
+## With Serialization
 
-          --sysdba  connect as sysdba
-         --sysoper  connect as sysoper
-          --schema  do 'alter session set current_schema' to this schema
-                    useful when you need to connect as sysdba and do not wish to modify SQL to fully qualify object names
+```
+$  ./sqlrun.sh
 
-           --trace  enable 10046 trace with binds - sets tracefile_identifier to SQLRUN-timestamp
+SEQUENCE_NAME   CACHE_SIZE ORDERED LAST_NUMBER
+--------------- ---------- ------- -----------
+SEQ_CACHE_TEST        1000 Y             83001
+Connection Test - JKSTILL - 66
 
-ToDo after initial script works as intended:
+Sequences per second: 217
 
-- ensure login via wallet works
-- store password in encrypted file (if no wallet avaiable)
-- possibly allow PL/SQL - not in scope right now
+```
 
-</pre>
+## Without Caching or Serialization
 
-<h3>Test Run</h3>
+The sequence was recreated with the ORDER and NOCACHE clauses, and tests run without locking
 
-This is using the example configuration files
+```bash
 
-<pre>
+$  ./sqlrun.sh
+
+SEQUENCE_NAME   CACHE_SIZE ORDERED LAST_NUMBER
+--------------- ---------- ------- -----------
+SEQ_CACHE_TEST           0 Y                 1
+Connection Test - JKSTILL - 74
 
 
-./sqlrun.pl \
-        --exe-mode semi-random \
-        --connect-mode flood \
-        --connect-delay 2 \
-        --max-sessions 20 \
-        --db p1 \
-        --username sys \
-        --password sys \
-        --schema system \
-        --sysdba \
-        --parmfile parameters.conf \
-        --sqlfile sqlfile.conf  \
-        --runtime 10
+Sequences per second: 238
+```
 
+While this was slightly faster than the serialized method, it does not prevent out of order timestamps.
 
-Connection Test - SYS - 72
+In 14278 transactions, 5829 of them contained timestamps that were out of order.
 
-SQL PARSER:
+The '-000' indicates a timestamp that is out of order
 
-DEBUG: 0
-sqlParmFileFQN:  SQL/sqlfile.conf
-exeMode: semi-random
+```bash
 
-Connect Mode: flood
-PID: 25517
-Waiting on child 25517...
-PID: 0
-PID: 25519
-Waiting on child 25519...
-PID: 0
-PID: 25521
-Waiting on child 25521...
-PID: 0
-PID: 25523
-Waiting on child 25523...
-PID: 0
-PID: 25525
-Waiting on child 25525...
-PID: 0
-PID: 25527
-Waiting on child 25527...
-PID: 0
-PID: 25529
-Waiting on child 25529...
-PID: 0
-PID: 25531
-Waiting on child 25531...
-PID: 0
-PID: 25533
-Waiting on child 25533...
-PID: 0
-PID: 25535
-Waiting on child 25535...
-PID: 0
-PID: 25537
-Waiting on child 25537...
-PID: 0
-PID: 25539
-Waiting on child 25539...
-PID: 0
-PID: 25541
-Waiting on child 25541...
-PID: 0
-PID: 25543
-Waiting on child 25543...
-PID: 0
-PID: 25545
-Waiting on child 25545...
-PID: 0
-PID: 25551
-Waiting on child 25551...
-PID: 0
-PID: 25553
-Waiting on child 25553...
-PID: 0
-PID: 25555
-Waiting on child 25555...
-PID: 0
-PID: 25557
-Waiting on child 25557...
-PID: 0
-PID: 25559
-Waiting on child 25559...
-PID: 0
-jkstill@poirot ~/oracle/sqlrun $
+@report.sql
 
-jkstill@poirot ~/oracle/sqlrun $ ps
-  PID TTY          TIME CMD
-12696 pts/3    00:00:00 bash
-25518 pts/3    00:00:00 perl
-25520 pts/3    00:00:00 perl
-25522 pts/3    00:00:00 perl
-25524 pts/3    00:00:00 perl
-25526 pts/3    00:00:00 perl
-25528 pts/3    00:00:00 perl
-25530 pts/3    00:00:00 perl
-25532 pts/3    00:00:00 perl
-25534 pts/3    00:00:00 perl
-25536 pts/3    00:00:00 perl
-25538 pts/3    00:00:00 perl
-25540 pts/3    00:00:00 perl
-25542 pts/3    00:00:00 perl
-25544 pts/3    00:00:00 perl
-25546 pts/3    00:00:00 perl
-25552 pts/3    00:00:00 perl
-25554 pts/3    00:00:00 perl
-25556 pts/3    00:00:00 perl
-25558 pts/3    00:00:00 perl
-25560 pts/3    00:00:00 perl
-25565 pts/3    00:00:00 ps
-</pre>
+     ID INST SEQ_TIME                       DIFF_TIME
+------- ---- ------------------------------ ------------------------------
+  14260    2 24-DEC-19 12.35.25.901760 PM   -000000000 00:00:00.028332
+  14261    1 24-DEC-19 12.35.25.937587 PM   +000000000 00:00:00.035827
+  14262    1 24-DEC-19 12.35.25.939310 PM   +000000000 00:00:00.001723
+  14263    2 24-DEC-19 12.35.25.911983 PM   -000000000 00:00:00.027327
+  14264    1 24-DEC-19 12.35.25.949544 PM   +000000000 00:00:00.037561
+  14265    2 24-DEC-19 12.35.25.928079 PM   -000000000 00:00:00.021465
+  14266    1 24-DEC-19 12.35.25.958808 PM   +000000000 00:00:00.030729
+  14267    2 24-DEC-19 12.35.25.935448 PM   -000000000 00:00:00.023360
+  14268    1 24-DEC-19 12.35.25.960794 PM   +000000000 00:00:00.025346
+  14269    1 24-DEC-19 12.35.25.970212 PM   +000000000 00:00:00.009418
+  14270    2 24-DEC-19 12.35.25.944426 PM   -000000000 00:00:00.025786
+  14271    1 24-DEC-19 12.35.25.976371 PM   +000000000 00:00:00.031945
+  14272    2 24-DEC-19 12.35.25.954821 PM   -000000000 00:00:00.021550
+  14273    1 24-DEC-19 12.35.25.985044 PM   +000000000 00:00:00.030223
+  14274    1 24-DEC-19 12.35.25.986407 PM   +000000000 00:00:00.001363
+  14275    2 24-DEC-19 12.35.25.963315 PM   -000000000 00:00:00.023092
+  14276    1 24-DEC-19 12.35.25.994382 PM   +000000000 00:00:00.031067
+  14277    2 24-DEC-19 12.35.25.974950 PM   -000000000 00:00:00.019432
+  14278    2 24-DEC-19 12.35.25.980648 PM   +000000000 00:00:00.005698
+  14279    2 24-DEC-19 12.35.25.992245 PM   +000000000 00:00:00.011597
 
-Here is another test using the --trace option
+```
 
-<pre>
+# linuxptp
 
-./sqlrun.pl \
-         --exe-mode semi-random \
-         --connect-mode flood \
-         --connect-delay 2 \
-         --max-sessions 20 \
-         --db p1 \
-         --username sys \
-         --password sl3add \
-         --schema system \
-         --sysdba \
-         --parmfile parameters.conf \
-         --sqlfile sqlfile.conf  \
-         --runtime 10 \
-         --trace
+Rather than serialization, more accurate timekeeping could be configured.
 
-Connection Test - SYS - 90
+chrony can be configured to use the ptp protocol, allowing single digit microsecond accuracy of clocks in a cluster.
 
+While this would not guarantee the timestamps would always be ascending, it does make it more likely.
 
-SQL PARSER:
+More about linuxptp:
 
-DEBUG: 0
-sqlParmFileFQN:  SQL/sqlfile.conf
-exeMode: semi-random
+[http://linuxptp.sourceforge.net](http://linuxptp.sourceforge.net)
 
-tracefile_identifier = SQLRUN-20170001123638
-Connect Mode: flood
-PID: 25676
-Waiting on child 25676...
-PID: 0
-PID: 25678
-Waiting on child 25678...
-PID: 0
-PID: 25680
-Waiting on child 25680...
-PID: 0
-PID: 25682
-Waiting on child 25682...
-PID: 0
-PID: 25684
-Waiting on child 25684...
-PID: 0
-PID: 25686
-Waiting on child 25686...
-PID: 0
-PID: 25688
-Waiting on child 25688...
-PID: 0
-PID: 25690
-Waiting on child 25690...
-PID: 0
-PID: 25692
-Waiting on child 25692...
-PID: 0
-PID: 25694
-Waiting on child 25694...
-PID: 0
-PID: 25696
-Waiting on child 25696...
-PID: 0
-PID: 25698
-Waiting on child 25698...
-PID: 0
-PID: 25700
-Waiting on child 25700...
-PID: 0
-PID: 25702
-Waiting on child 25702...
-PID: 0
-PID: 25704
-Waiting on child 25704...
-PID: 0
-PID: 25706
-Waiting on child 25706...
-PID: 0
-PID: 25708
-Waiting on child 25708...
-PID: 0
-PID: 25710
-Waiting on child 25710...
-PID: 0
-PID: 25712
-Waiting on child 25712...
-PID: 0
-PID: 25714
-Waiting on child 25714...
-PID: 0
+[CONFIGURING PTP USING PTP4L](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/6/html/deployment_guide/ch-configuring_ptp_using_ptp4l)
 
+For best results, an external (to the cluster) timekeeper server should be used.
+The timekeeper should be on HW, not a virtual machine, as linuxptp can use the clock on the NIC.
 
- Trace File: ora12c102rac01.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a1/trace/js122a1_ora_23607_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac01.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a1/trace/js122a1_ora_23609_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac01.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a1/trace/js122a1_ora_23613_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac01.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a1/trace/js122a1_ora_23611_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac02.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a2/trace/js122a2_ora_17059_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac01.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a1/trace/js122a1_ora_23615_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac01.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a1/trace/js122a1_ora_23617_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac01.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a1/trace/js122a1_ora_23621_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac02.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a2/trace/js122a2_ora_17061_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac01.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a1/trace/js122a1_ora_23619_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac02.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a2/trace/js122a2_ora_17065_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac02.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a2/trace/js122a2_ora_17063_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac02.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a2/trace/js122a2_ora_17067_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac02.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a2/trace/js122a2_ora_17069_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac02.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a2/trace/js122a2_ora_17071_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac02.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a2/trace/js122a2_ora_17073_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac02.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a2/trace/js122a2_ora_17075_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac02.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a2/trace/js122a2_ora_17079_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac02.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a2/trace/js122a2_ora_17077_SQLRUN-20170001123638.trc
-Trace File: ora12c102rac02.jks.com./u01/cdbrac/app/oracle/diag/rdbms/js122a/js122a2/trace/js122a2_ora_17081_SQLRUN-20170001123638.trc
-
-~/oracle/sqlrun $ ps
-  PID TTY          TIME CMD
-12696 pts/3    00:00:00 bash
-25677 pts/3    00:00:00 perl
-25679 pts/3    00:00:00 perl
-25681 pts/3    00:00:00 perl
-25683 pts/3    00:00:00 perl
-25685 pts/3    00:00:00 perl
-25687 pts/3    00:00:00 perl
-25689 pts/3    00:00:00 perl
-25691 pts/3    00:00:00 perl
-25693 pts/3    00:00:00 perl
-25695 pts/3    00:00:00 perl
-25697 pts/3    00:00:00 perl
-25699 pts/3    00:00:00 perl
-25701 pts/3    00:00:00 perl
-25703 pts/3    00:00:00 perl
-25705 pts/3    00:00:00 perl
-25707 pts/3    00:00:00 perl
-25709 pts/3    00:00:00 perl
-25711 pts/3    00:00:00 perl
-25713 pts/3    00:00:00 perl
-25715 pts/3    00:00:00 perl
-25720 pts/3    00:00:00 ps
-
-</pre>
-
+This is particularly true for Virtual clusters, as there is no HW clock on the virtual NICs.
 
 

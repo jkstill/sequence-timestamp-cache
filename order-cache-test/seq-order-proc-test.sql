@@ -6,7 +6,7 @@ set serveroutput on size unlimited
 declare
 
 	-- run for this many seconds
-	runTimeSeconds number := 1200;
+	runTimeSeconds number := 10;
 	randomSeed integer := 42;
 	randomLow number := .001;
 	randomHigh number := .01;
@@ -60,8 +60,10 @@ begin
 		-- whether the nextval and timestamp are used directly in SQL or 
 		-- assigned to variables
 
-		id := seq_cache_test.nextval;
-		currTimestamp := systimestamp;
+		--id := seq_cache_test.nextval;
+		--currTimestamp := systimestamp;
+
+		seq_timestamp(id,currTimestamp);
 
 		insert into seq_test_table(id, seq_time, inst_id)
 		values( id, currTimestamp, instId);

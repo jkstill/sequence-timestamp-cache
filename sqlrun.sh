@@ -1,7 +1,7 @@
 #!/bin/bash		
 
 
-declare sqlrunPassword=grok
+declare sqlrunPassword=$(cat password.txt)
 #declare server=ora192rac-scan
 declare scanName=rac19c-scan
 declare db=pdb1.jks.com
@@ -43,7 +43,7 @@ startTime=$(date '+%s.%N')
 	--parmfile parameters.conf \
 	--sqlfile sqlfile.conf  \
 	--exe-delay 0.005 \
-	--runtime 120  > /dev/null
+	--runtime 60  > /dev/null
 	#--trace 
 
 #: << 'COMMENT'
